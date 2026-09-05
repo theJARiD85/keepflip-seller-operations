@@ -1,0 +1,14 @@
+{
+  "name": "keepflip-seller-operations",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "src/main.js",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "setup": "node scripts/setup-schema.js"
+  }
+}
