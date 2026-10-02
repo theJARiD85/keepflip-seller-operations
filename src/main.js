@@ -1,6 +1,6 @@
 import { config, createApi, createStore } from './appwrite-store.js';
 import { SellerError, ensure, object } from './domain.js';
-import { capabilities, mutate, listOrders, detail, inventory, analytics, preferences } from './operations.js';
+import { capabilities, mutate, listOrders, detail, inventory, analytics, preferences, matchEmailSale, recordEmailSale } from './operations.js';
 
 export function createHandler({env=process.env,fetchImpl=fetch}={}) {
   return async ({req,res,error}) => {
@@ -37,6 +37,11 @@ export function createHandler({env=process.env,fetchImpl=fetch}={}) {
         case '/orders/fulfillment': result = await mutate(store,account.$id,'fulfillment',body); break;
         case '/orders/ship': result = await mutate(store,account.$id,'ship',body); break;
         case '/orders/reconcile': result = await mutate(store,account.$id,'reconcile',body); break;
+        case '/email-sale/match': result = await matchEmailSale(store,account.$id,body); break;
+        case '/email-sale/record':
+          ensure((await capabilities(store,account.$id)).automation,'SERIOUS_REQUIRED','Email sale automation requires an active Serious subscription.',403);
+          result = await recordEmailSale(store,account.$id,body);
+          break;
         case '/analytics': result = await analytics(store,account.$id,body); break;
         case '/preferences/get': result = await preferences(store,account.$id,'get',body); break;
         case '/preferences/save': result = await preferences(store,account.$id,'save',body); break;

@@ -46,6 +46,9 @@ export async function mutate(store, owner, action, body, clock = () => new Date(
         cost = Number(BigInt(item.inventoryCostCentsOnHand) * BigInt(input.quantity) / BigInt(before));
         if (cost > 0) await store.decrement(store.c.items,input.itemId,'inventoryCostCentsOnHand',cost,tx);
       }
+      if (item.quantityOnHand === 0 && input.channel !== 'manual' && input.channel !== 'ebay') {
+        await store.update(store.c.items,input.itemId,{resaleStatus:'sold',updatedAt:now},tx);
+      }
       const order = { ...input, title:string(item.title,'Inventory title',300),
         sku:string(item.sku,'SKU',120,true), storageLocation:string(item.storageLocation,'Storage location',120,true),
         packingLocation:null, source:input.channel,status:'awaiting_packing',packedAt:null,carrier:null,trackingNumber:null,
@@ -78,6 +81,132 @@ export async function mutate(store, owner, action, body, clock = () => new Date(
     throw error;
   }
 }
+
+const EMAIL_SALE_PLATFORMS = new Set(['depop', 'poshmark', 'mercari']);
+
+function emailSalePlatform(value) {
+  const platform = string(value, 'Marketplace', 20).toLowerCase();
+  ensure(EMAIL_SALE_PLATFORMS.has(platform), 'INVALID_INPUT', 'Unsupported marketplace.');
+  return platform;
+}
+
+function normalizedMatchText(value) {
+  return typeof value === 'string'
+    ? value.normalize('NFKC').trim().replace(/\s+/g, ' ').toLocaleLowerCase('en-US')
+    : '';
+}
+
+function emailSaleCandidate(row) {
+  return { itemId: row.$id, title: string(row.title, 'Inventory title', 300), sku: string(row.sku, 'SKU', 120, true) };
+}
+
+async function listOwnedInventoryForMatch(store, owner) {
+  const rows = [];
+  let cursor = null;
+  do {
+    const page = await store.list(store.c.items, owner, cursor);
+    for (const row of page.rows) {
+      if (row.ownerId === owner && row.resaleStatus !== 'sold' && Number(row.quantityOnHand ?? 1) > 0) rows.push(row);
+    }
+    cursor = page.rows.length === 50 ? page.rows.at(-1).$id : null;
+    ensure(!cursor || rows.length < 10000, 'INVENTORY_TOO_LARGE', 'Inventory is too large to match this sale.', 422);
+  } while (cursor);
+  return rows;
+}
+
+export async function matchEmailSale(store, owner, body) {
+  only(body, ['platform', 'title', 'sku']);
+  const platform = emailSalePlatform(body.platform);
+  const title = string(body.title, 'Listing title', 300, true);
+  const sku = string(body.sku, 'SKU', 120, true);
+  ensure(title || sku, 'INVALID_INPUT', 'The email did not include a listing title or SKU.');
+
+  const rows = await listOwnedInventoryForMatch(store, owner);
+  let matches = [];
+  let matchType = null;
+  if (sku) {
+    const key = normalizedMatchText(sku);
+    matches = rows.filter(row => [row.sku, row.ebaySku].some(value => normalizedMatchText(value) === key));
+    matchType = 'sku';
+  } else if (title) {
+    const key = normalizedMatchText(title);
+    matches = rows.filter(row => normalizedMatchText(row.title) === key);
+    matchType = 'exact_title';
+  }
+
+  const candidates = matches.slice(0, 10).map(emailSaleCandidate);
+  if (matches.length === 1) return { status: 'matched', platform, matchType, candidate: candidates[0] };
+  if (matches.length > 1) return { status: 'ambiguous', platform, matchType, totalMatches: matches.length, candidates };
+  return { status: 'no_match', platform, matchType, candidates: [] };
+}
+
+export async function recordEmailSale(store, owner, body, clock = () => new Date().toISOString()) {
+  only(body, ['idempotencyKey', 'itemId', 'platform', 'title', 'sku', 'quantity', 'saleCents', 'currency', 'soldAt']);
+  const platform = emailSalePlatform(body.platform);
+  const itemId = id(body.itemId);
+  const title = string(body.title, 'Listing title', 300, true);
+  const sku = string(body.sku, 'SKU', 120, true);
+  ensure(title || sku, 'INVALID_INPUT', 'The sale needs a listing title or SKU.');
+  const idempotencyKey = string(body.idempotencyKey, 'Operation key', 120);
+  const soldAt = date(body.soldAt, 'Sold at');
+  const operationBody = {
+    idempotencyKey,
+    input: {
+      itemId,
+      quantity: body.quantity ?? 1,
+      channel: platform,
+      saleCents: body.saleCents,
+      shippingChargedCents: 0,
+      currency: body.currency ?? 'USD',
+      soldAt,
+      shipBy: null,
+      feesCents: null,
+      shippingExpenseCents: null,
+      refundCents: null,
+      payoutCents: null,
+      packingNotes: null,
+    },
+  };
+  const operationHash = digest({ action: 'create', body: operationBody });
+  const previous = await replay(store, owner, eventId(owner, idempotencyKey), operationHash);
+  if (previous) {
+    const current = owned(await store.get(store.c.items, itemId), owner);
+    return {
+      ...previous,
+      item: {
+        itemId,
+        quantityRemaining: Number.isSafeInteger(current.quantityOnHand) ? current.quantityOnHand : null,
+        resaleStatus: current.resaleStatus ?? null,
+        ebayOfferId: current.ebayOfferId ?? null,
+        ebayListingId: current.ebayListingId ?? null,
+      },
+    };
+  }
+
+  const rows = await listOwnedInventoryForMatch(store, owner);
+  const item = rows.find(row => row.$id === itemId);
+  ensure(item, 'NOT_FOUND', 'That inventory item is not available to this account.', 404);
+  const matches = sku
+    ? rows.filter(row => [row.sku, row.ebaySku].some(value => normalizedMatchText(value) === normalizedMatchText(sku)))
+    : rows.filter(row => normalizedMatchText(row.title) === normalizedMatchText(title));
+  ensure(matches.some(row => row.$id === itemId), 'SALE_MATCH_CHANGED', 'The sale no longer matches that inventory item. Refresh and review it again.', 409);
+  ensure(Number.isSafeInteger(body.saleCents) && body.saleCents >= 0 && body.saleCents <= 1_000_000_000, 'INVALID_INPUT', 'Sale price must be entered in cents.');
+
+  const result = await mutate(store, owner, 'create', operationBody, clock);
+  const current = await store.get(store.c.items, itemId);
+  owned(current, owner);
+  return {
+    ...result,
+    item: {
+      itemId,
+      quantityRemaining: Number.isSafeInteger(current.quantityOnHand) ? current.quantityOnHand : null,
+      resaleStatus: current.resaleStatus ?? null,
+      ebayOfferId: current.ebayOfferId ?? null,
+      ebayListingId: current.ebayListingId ?? null,
+    },
+  };
+}
+
 export async function listOrders(store,owner,body) {
   only(body,['cursor']);
   if (body.cursor) owned(await store.get(store.c.orders,id(body.cursor)),owner);
