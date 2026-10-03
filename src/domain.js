@@ -52,15 +52,6 @@ export function margin(order) {
     marginPercent: profitCents !== null && netRevenueCents > 0 ? Math.round(profitCents / netRevenueCents * 10000) / 100 : null,
     payoutCents: order.money.payoutCents, payoutKnown: order.money.payoutCents !== null };
 }
-export function seriousAccess(rows, ownerId, now = Date.now()) {
-  // Duplicate authority rows are ambiguous: deny rather than picking a favorable record.
-  if (rows.length !== 1) return false;
-  const row = rows[0];
-  return row.ownerId === ownerId && row.provider === 'revenuecat' && row.plan === 'serious' &&
-    row.entitlement === 'keepflip_serious' && row.isSandbox === false &&
-    ['active', 'trialing', 'grace_period', 'cancelled'].includes(row.status) &&
-    Date.parse(row.currentPeriodEndsAt) > now;
-}
 export function canonical(value) {
   if (Array.isArray(value)) return '[' + value.map(canonical).join(',') + ']';
   if (value && typeof value === 'object') return '{' + Object.keys(value).sort().map(key => JSON.stringify(key) + ':' + canonical(value[key])).join(',') + '}';

@@ -39,14 +39,12 @@ export function createHandler({env=process.env,fetchImpl=fetch}={}) {
         case '/orders/reconcile': result = await mutate(store,account.$id,'reconcile',body); break;
         case '/email-sale/match': result = await matchEmailSale(store,account.$id,body); break;
         case '/email-sale/record':
-          ensure((await capabilities(store,account.$id)).automation,'SERIOUS_REQUIRED','Email sale automation requires an active Serious subscription.',403);
           result = await recordEmailSale(store,account.$id,body);
           break;
         case '/analytics': result = await analytics(store,account.$id,body); break;
         case '/preferences/get': result = await preferences(store,account.$id,'get',body); break;
         case '/preferences/save': result = await preferences(store,account.$id,'save',body); break;
         case '/sync/ebay':
-          ensure((await capabilities(store,account.$id)).automation,'SERIOUS_REQUIRED','Automation requires an active Serious subscription.',403);
           throw new SellerError('ADAPTER_NOT_CONFIGURED','eBay order sync is not connected yet.',501);
         default: throw new SellerError('NOT_FOUND','Unknown seller operation.',404);
       }

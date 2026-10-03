@@ -1,15 +1,10 @@
-import { SellerError, ensure, only, id, integer, string, date, normalizeCreate, updateOrder, publicOrder, digest, eventId, seriousAccess } from './domain.js';
+import { SellerError, ensure, only, id, integer, string, date, normalizeCreate, updateOrder, publicOrder, digest, eventId } from './domain.js';
 
 function owned(row, owner) {
   ensure(row && row.ownerId === owner, 'NOT_FOUND', 'Item or order not found.', 404); return row;
 }
-export async function access(store, owner) {
-  const result = await store.list(store.c.subscriptions, owner);
-  return seriousAccess(result.rows, owner);
-}
-export async function capabilities(store, owner) {
-  const serious = await access(store, owner);
-  return { manual:true, advancedAnalytics:serious, automation:serious, ebaySyncAvailable:false };
+export function capabilities() {
+  return { manual:true, advancedAnalytics:true, automation:true, ebaySyncAvailable:false };
 }
 async function replay(store, owner, key, hash) {
   const event = await store.get(store.c.events, key);
@@ -237,7 +232,6 @@ export async function inventory(store,owner,body) {
 }
 export async function analytics(store,owner,body) {
   only(body,[]);
-  ensure(await access(store,owner),'SERIOUS_REQUIRED','Advanced analytics requires an active Serious subscription.',403);
   const groups = {};
   let cursor, scanned = 0;
   do {
@@ -291,11 +285,9 @@ export async function preferences(store,owner,action,body) {
   if (action === 'get') {
     const row = await store.get(store.c.preferences,pid);
     if (row) owned(row,owner);
-    return {preferences:row ? JSON.parse(row.valueJson) : emptyPreferences(),revision:row?.version ?? 0,serious:await access(store,owner)};
+    return {preferences:row ? JSON.parse(row.valueJson) : emptyPreferences(),revision:row?.version ?? 0};
   }
   const value = preferencesValue(body.value), expected = integer(body.expectedRevision,'Preferences revision',1000000);
-  // Resolve capability before commit so a subscription lookup failure cannot hide a successful save.
-  const serious = await access(store,owner);
   const tx = await store.begin();
   try {
     const row = await store.get(store.c.preferences,pid,tx);
@@ -309,6 +301,6 @@ export async function preferences(store,owner,action,body) {
       await store.create(store.c.preferences,pid,{ownerId:owner,version:1,valueJson:JSON.stringify(value)},tx);
     }
     await store.commit(tx);
-    return {preferences:value,revision:expected+1,serious};
+    return {preferences:value,revision:expected+1};
   } catch(e) {await store.rollback(tx).catch(()=>{});throw e;}
 }

@@ -5,8 +5,8 @@ export function config(env = process.env) {
   const c = { endpoint: required('APPWRITE_FUNCTION_API_ENDPOINT').replace(/\/$/, ''),
     projectId: required('APPWRITE_FUNCTION_PROJECT_ID'), databaseId: id(required('APPWRITE_DATABASE_ID')),
     items: id(required('APPWRITE_ITEMS_TABLE_ID')), orders: id(required('SELLER_ORDERS_TABLE_ID')),
-    events: id(required('SELLER_EVENTS_TABLE_ID')), preferences: id(required('SELLER_PREFERENCES_TABLE_ID')), subscriptions: id(required('APPWRITE_USER_SUBSCRIPTIONS_TABLE_ID')) };
-  ensure(new Set([c.items,c.orders,c.events,c.subscriptions,c.preferences]).size === 5, 'CONFIGURATION', 'Seller table IDs must be distinct.', 503);
+    events: id(required('SELLER_EVENTS_TABLE_ID')), preferences: id(required('SELLER_PREFERENCES_TABLE_ID')) };
+  ensure(new Set([c.items,c.orders,c.events,c.preferences]).size === 4, 'CONFIGURATION', 'Seller table IDs must be distinct.', 503);
   ensure(new URL(c.endpoint).protocol === 'https:' || env.SELLER_ALLOW_LOCAL_HTTP === 'true', 'CONFIGURATION', 'Appwrite requires HTTPS.', 503);
   return c;
 }
